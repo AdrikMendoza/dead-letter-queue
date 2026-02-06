@@ -1,0 +1,261 @@
+{
+  "name": "#1 - Main Error Logger",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e4e0640c-1667-4cf6-a728-b11ad924375f",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "tableId": "dlq_events",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "workflow_name",
+              "fieldValue": "={{ $json.workflow.name }}"
+            },
+            {
+              "fieldId": "error_message",
+              "fieldValue": "={{ $json.execution.error.message }}"
+            },
+            {
+              "fieldId": "payload",
+              "fieldValue": "={{JSON.stringify($json)}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Pending"
+            },
+            {
+              "fieldId": "execution_id",
+              "fieldValue": "={{$json.execution.id}}"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "Main Error Logger"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "3391a5ae-17ea-4038-a279-7aa356c35a86",
+      "name": "Create a row",
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#automation-alerts\",\n  \"text\": \"🚨 Automation Failure Detected\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"🚨 Automation Failure Detected\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Workflow:*\\nLead Intake — Webhook → Normalize/Score → Route → CRM\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Owner:*\\n<@U0AAB13U93R>\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Execution:*\\n<http://localhost:5678/workflow/j2n33D8MtnbJ5_XmVeuKX/executions/31188|Open Execution>\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Error:*\\nSlack error response: {\\\"ok\\\":false,\\\"error\\\":\\\"channel_not_found\\\"}\"\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"✅ *Logged in Supabase DLQ*\\n*Status:* Pending | *Source:* <http://localhost:5678/workflow/0_odqPLzrlnEu8niG9rQl|Open Workflow>\"\n      }\n    },\n    {\n      \"type\": \"divider\"\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Action required:* Review & replay the workflow when ready.\"\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"🔁 Replay\"\n          },\n          \"style\": \"primary\",\n          \"action_id\": \"dlq_replay\",\n          \"value\": \"31188\"\n        },\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"✅ Resolve\"\n          },\n          \"style\": \"danger\",\n          \"action_id\": \"dlq_resolve\",\n          \"value\": \"31188\",\n          \"confirm\": {\n            \"title\": {\n              \"type\": \"plain_text\",\n              \"text\": \"Resolve this failure?\"\n            },\n            \"text\": {\n              \"type\": \"mrkdwn\",\n              \"text\": \"This will mark the event as resolved in Supabase.\"\n            },\n            \"confirm\": {\n              \"type\": \"plain_text\",\n              \"text\": \"Resolve\"\n            },\n            \"deny\": {\n              \"type\": \"plain_text\",\n              \"text\": \"Cancel\"\n            }\n          }\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        624,
+        0
+      ],
+      "id": "94e8945c-d31f-4f6e-958c-5c66115d9f2d",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "neCuWaBzxzTUCFxu",
+          "name": "Slack Messages Interactive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c0f98188-e244-4beb-9e21-6ebb24778b51",
+              "leftValue": "={{ $json.execution.mode }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        -16
+      ],
+      "id": "7c8e2c96-54cd-4bcc-afad-a3806e4ef54f",
+      "name": "If"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -176
+      ],
+      "id": "a9ba741f-841a-49ac-8fa1-a34ae16660cf",
+      "name": "No Operation, do nothing"
+    }
+  ],
+  "pinData": {
+    "Error Trigger": [
+      {
+        "json": {
+          "execution": {
+            "id": "31188",
+            "url": "http://localhost:5678/workflow/j2n33D8MtnbJ5_XmVeuKX/executions/31188",
+            "error": {
+              "level": "warning",
+              "tags": {
+                "reWrapped": true
+              },
+              "timestamp": 1770350960243,
+              "context": {},
+              "functionality": "regular",
+              "name": "NodeApiError",
+              "node": {
+                "parameters": {
+                  "oldVersionNotice": "",
+                  "authentication": "accessToken",
+                  "resource": "message",
+                  "operation": "post",
+                  "channel": "#new-leads",
+                  "text": "={{'🟡 NEW LEAD\\nName: ' + ($json.firstName||'') + ' ' + ($json.lastName||'') + '\\nCompany: ' + ($json.company||'N/A') + '\\nEmail: ' + $json.email + '\\nScore: ' + $json.leadScore + ' (' + $json.leadTier + ')\\nInterested: ' + ($json.servicesInterested||[]).join(', ') + '\\nSource: ' + ($json.howDidYouHear||'N/A') }}",
+                  "jsonParameters": false,
+                  "otherOptions": {},
+                  "attachments": [],
+                  "blocksUi": {}
+                },
+                "id": "c464a91d-d5b5-49ad-b08a-decc33af011a",
+                "name": "Slack (Notify Warm/Cold)",
+                "type": "n8n-nodes-base.slack",
+                "typeVersion": 1,
+                "position": [
+                  720,
+                  112
+                ],
+                "credentials": {
+                  "slackApi": {
+                    "id": "lNRQF3VLTSWo5KnS",
+                    "name": "Slack account"
+                  }
+                }
+              },
+              "messages": [
+                "Slack error response: {\"ok\":false,\"error\":\"channel_not_found\"}"
+              ],
+              "httpCode": null,
+              "message": "Slack error response: {\"ok\":false,\"error\":\"channel_not_found\"}",
+              "stack": "NodeApiError: Slack error response: {\"ok\":false,\"error\":\"channel_not_found\"}\n    at ExecuteContext.slackApiRequest (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-nodes-base@file+packages+nodes-base_@aws-sdk+credential-providers@3.808.0_asn1.js@5_8da18263ca0574b0db58d4fefd8173ce/node_modules/n8n-nodes-base/nodes/Slack/V1/GenericFunctions.ts:80:9)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-nodes-base@file+packages+nodes-base_@aws-sdk+credential-providers@3.808.0_asn1.js@5_8da18263ca0574b0db58d4fefd8173ce/node_modules/n8n-nodes-base/nodes/Slack/V1/SlackV1.node.ts:900:22)\n    at WorkflowExecute.executeNode (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_ec37920eb95917b28efaa783206b20f3/node_modules/n8n-core/src/execution-engine/workflow-execute.ts:1045:8)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_ec37920eb95917b28efaa783206b20f3/node_modules/n8n-core/src/execution-engine/workflow-execute.ts:1226:11)\n    at /usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_ec37920eb95917b28efaa783206b20f3/node_modules/n8n-core/src/execution-engine/workflow-execute.ts:1662:27\n    at /usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_ec37920eb95917b28efaa783206b20f3/node_modules/n8n-core/src/execution-engine/workflow-execute.ts:2297:11"
+            },
+            "lastNodeExecuted": "Slack (Notify Warm/Cold)",
+            "mode": "webhook",
+            "executionContext": {
+              "version": 1,
+              "establishedAt": 1770350959652,
+              "source": "webhook",
+              "triggerNode": {
+                "name": "Lead Intake (Webpage) Webhook",
+                "type": "n8n-nodes-base.webhook"
+              }
+            }
+          },
+          "workflow": {
+            "id": "j2n33D8MtnbJ5_XmVeuKX",
+            "name": "Lead Intake — Webhook → Normalize/Score → Route → CRM"
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create a row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "a353cc7f-cc66-4923-bfc5-319c400fd4e6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e5e98e8b2203f67e9af3cbb09d6f17bccc134ba44abab87138e197a50cd19cda"
+  },
+  "id": "0_odqPLzrlnEu8niG9rQl",
+  "tags": []
+}

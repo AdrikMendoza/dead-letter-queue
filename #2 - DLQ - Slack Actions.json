@@ -1,0 +1,402 @@
+{
+  "name": "#2 - DLQ - Slack Actions",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Parse Slack Interactivity payload (x-www-form-urlencoded)\n// Slack sends { payload: \"{...json...}\" } in the body\n\nconst body = $json.body || $json;\nconst raw = body.payload;\nif (!raw) {\n  return [{ json: { has_error: true, error: 'Missing payload in Slack request', body } }];\n}\n\nconst payload = typeof raw === 'string' ? JSON.parse(raw) : raw;\nconst action = payload.actions?.[0];\n\nif (!action) {\n  return [{ json: { has_error: true, error: 'No actions[] in payload', payload } }];\n}\n\nconst action_id = action.action_id; // dlq_replay | dlq_resolve\nconst dlq_event_id = action.value;  // uuid\nconst user_id = payload.user?.id;\nconst user_name = payload.user?.username || payload.user?.name;\nconst response_url = payload.response_url;\n\nreturn [{\n  json: {\n    has_error: false,\n    action_id,\n    dlq_event_id,\n    user_id,\n    user_name,\n    response_url,\n    payload\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        544
+      ],
+      "id": "e0030381-c047-4259-b6c7-c385b513b7fc",
+      "name": "Parse Slack Payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "noerr",
+              "leftValue": "={{ $json.has_error }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        544
+      ],
+      "id": "a2d47347-4a75-4daf-a1f5-631df136bfad",
+      "name": "If: Parsed OK"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action_id }}",
+                    "rightValue": "dlq_replay",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "e51cfa35-7527-4354-b496-07433b510f9a"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action_id }}",
+                    "rightValue": "dlq_resolve",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "3e146fc9-7964-49af-9746-41975ba1607c"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        64,
+        544
+      ],
+      "id": "e59fe1bb-553e-4ca8-a8d6-b2fefb65a9d0",
+      "name": "Switch: Action"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "dlq_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{$json.payload.actions[0].value}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "resolved"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "slack"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        400,
+        608
+      ],
+      "id": "20af805e-bf39-405d-b928-e30fa0d0a1b0",
+      "name": "Supabase: Mark Resolved",
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://slack.com/api/chat.update",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_SLACK_BOT_TOKEN_HERE\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $('Switch: Action').item.json.payload.channel.id }}\",\n  \"ts\": \"{{ $('Switch: Action').item.json.payload.container.message_ts }}\",\n  \"text\": \"🔄 Replaying…\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🚨 Automation Failure Detected\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Workflow:*\\n{{ $json.workflow_name }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Owner:*\\n<@{{ $('Switch: Action').item.json.payload.user.id }}>\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Execution:*\\n<{{ JSON.parse($json.payload).execution.url }}|Open Execution>\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Error:*\\n{{ $json.error_message }}}'\" }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"✅ *Logged in Supabase DLQ*\\n*Status:* Replaying | *Source:* <http://localhost:5678/workflow/{{ $workflow.id }}|Open Workflow>\"\n      }\n    },\n    { \"type\": \"divider\" },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Action required:* Review & replay the workflow when ready.\" }\n    },\n\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Actions:*\\n🔄 *Replaying…* triggered by <@{{ $('Switch: Action').item.json.payload.user.id }}>\\n⏳ *Resolve* will be available after replay finishes.\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        656,
+        400
+      ],
+      "id": "634f8788-7497-4121-9ce7-92ddbc1bd931",
+      "name": "Slack: Update Message (Replay)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Switch: Action').item.json.response_url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $('Switch: Action').item.json.payload.channel.id }}\",\n  \"ts\": \"{{ $('Switch: Action').item.json.payload.container.message_ts }}\",\n  \"text\": \"✅ Resolved\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"✅ Automation Resolved\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Workflow:*\\n{{ $json.workflow_name }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Resolved by:*\\n<@{{ $('Switch: Action').item.json.payload.user.id }}>\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Execution:*\\n<{{ JSON.parse($json.payload).execution.url }}|Open Execution>\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Error:*\\n{{ $json.error_message }}\" }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"✅ *Logged in Supabase DLQ*\\n*Status:* Resolved ✅ | *Source:* <http://localhost:5678/workflow/{{ $workflow.id }}|Open Workflow>\"\n      }\n    },\n    { \"type\": \"divider\" },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Actions:*\\n✅ *Resolved* by <@{{ $('Switch: Action').item.json.payload.user.id }}>\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        592,
+        768
+      ],
+      "id": "f1102b36-1c08-42a0-b697-4d17403e16ba",
+      "name": "Slack: Update Message (Resolve)"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "dlq_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{$json.payload.actions[0].value}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "replay_requested"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "slack"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        352,
+        432
+      ],
+      "id": "6b428903-b879-46c8-a561-c2ecce509a2f",
+      "name": "Supabase: Mark Replay Requested",
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dlq/actions",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        528
+      ],
+      "id": "35431cd2-96fb-497d-b3df-06ce86197ab2",
+      "name": "Webhook: Slack Actions",
+      "webhookId": "b585f25c-8cbf-4614-92a9-ed3bc3a94d2e"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_N8N_INSTANCE_URL/webhook/dlq/replay-worker",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"execution_id\": \"{{$('Switch: Action').item.json.dlq_event_id}}\",\n  \"channel\": \"{{$('Switch: Action').item.json.payload.channel.id}}\",\n  \"message_ts\": \"{{$('Switch: Action').item.json.payload.container.message_ts}}\",\n  \"requested_by\": \"{{$('Switch: Action').item.json.payload.user.id}}\",\n  \"response_url\": \"{{ $('Switch: Action').item.json.response_url }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        864,
+        400
+      ],
+      "id": "43d5838e-08e0-47b4-962b-88c01a680d47",
+      "name": "HTTP Request"
+    }
+  ],
+  "pinData": {
+    "Webhook: Slack Actions": [
+      {
+        "json": {
+          "headers": {
+            "host": "jeana-nonarithmetic-abigail.ngrok-free.dev",
+            "user-agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+            "content-length": "4248",
+            "accept": "application/json,*/*",
+            "accept-encoding": "gzip,deflate",
+            "content-type": "application/x-www-form-urlencoded",
+            "x-forwarded-for": "18.207.162.23",
+            "x-forwarded-host": "jeana-nonarithmetic-abigail.ngrok-free.dev",
+            "x-forwarded-proto": "https",
+            "x-slack-request-timestamp": "1769384623",
+            "x-slack-signature": "v0=eb7d6229c1c567a7c02a06cfd6955b1b96f5031c28c83372ed7d22204ab5c3e9"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "payload": "{\"type\":\"block_actions\",\"user\":{\"id\":\"U0AAB13U93R\",\"username\":\"aldair.mendoza.h96\",\"name\":\"aldair.mendoza.h96\",\"team_id\":\"T0AAQD1SSLE\"},\"api_app_id\":\"A0AAW2SHC2G\",\"token\":\"6PSoctUSKRQaQntYUia5Bn7A\",\"container\":{\"type\":\"message\",\"message_ts\":\"1769384621.595369\",\"channel_id\":\"C0AB5CASDND\",\"is_ephemeral\":false},\"trigger_id\":\"10363229216691.10364443910694.4ca65b1777f2ea4bb4098ad750b8961c\",\"team\":{\"id\":\"T0AAQD1SSLE\",\"domain\":\"amuyuinsightworkspace\"},\"enterprise\":null,\"is_enterprise_install\":false,\"channel\":{\"id\":\"C0AB5CASDND\",\"name\":\"automation-alerts\"},\"message\":{\"user\":\"U0AAB1C3KT9\",\"type\":\"message\",\"ts\":\"1769384621.595369\",\"bot_id\":\"B0ABLPK7TA4\",\"app_id\":\"A0AAW2SHC2G\",\"text\":\":rotating_light: Automation Failure Detected\",\"team\":\"T0AAQD1SSLE\",\"blocks\":[{\"type\":\"header\",\"block_id\":\"Lwp7M\",\"text\":{\"type\":\"plain_text\",\"text\":\":rotating_light: Automation Failure Detected\",\"emoji\":true}},{\"type\":\"section\",\"block_id\":\"auGey\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*Workflow:*\\nError 1\",\"verbatim\":false},{\"type\":\"mrkdwn\",\"text\":\"*Owner:*\\n<@U0AAB13U93R>\",\"verbatim\":false},{\"type\":\"mrkdwn\",\"text\":\"*Execution:*\\n<http:\\/\\/localhost:5678\\/workflow\\/De1vqkVGu4OnSO8eQHVRa\\/executions\\/11|Open Execution>\",\"verbatim\":false},{\"type\":\"mrkdwn\",\"text\":\"*Error:*\\nUnexpected token '}' \",\"verbatim\":false}]},{\"type\":\"section\",\"block_id\":\"T2hsI\",\"text\":{\"type\":\"mrkdwn\",\"text\":\":white_check_mark: *Logged in Supabase DLQ*\\n*Status:* Pending | *Source:* <http:\\/\\/localhost:5678\\/workflow\\/0_odqPLzrlnEu8niG9rQl|Open Workflow>\",\"verbatim\":false}},{\"type\":\"divider\",\"block_id\":\"8Jb6k\"},{\"type\":\"section\",\"block_id\":\"OVFqZ\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Action required:* Review &amp; replay the workflow when ready.\",\"verbatim\":false}},{\"type\":\"actions\",\"block_id\":\"JiU+a\",\"elements\":[{\"type\":\"button\",\"action_id\":\"dlq_replay\",\"text\":{\"type\":\"plain_text\",\"text\":\":repeat: Replay\",\"emoji\":true},\"style\":\"primary\",\"value\":\"11\"},{\"type\":\"button\",\"action_id\":\"dlq_resolve\",\"text\":{\"type\":\"plain_text\",\"text\":\":white_check_mark: Resolve\",\"emoji\":true},\"style\":\"danger\",\"value\":\"11\",\"confirm\":{\"title\":{\"type\":\"plain_text\",\"text\":\"Resolve this failure?\",\"emoji\":true},\"text\":{\"type\":\"mrkdwn\",\"text\":\"This will mark the event as resolved in Supabase.\",\"verbatim\":false},\"confirm\":{\"type\":\"plain_text\",\"text\":\"Resolve\",\"emoji\":true},\"deny\":{\"type\":\"plain_text\",\"text\":\"Cancel\",\"emoji\":true}}}]}]},\"state\":{\"values\":{}},\"response_url\":\"https:\\/\\/hooks.slack.com\\/actions\\/T0AAQD1SSLE\\/10367567620566\\/jlgqGy9CFUMiJfoy1WA8TZPr\",\"actions\":[{\"action_id\":\"dlq_replay\",\"block_id\":\"JiU+a\",\"text\":{\"type\":\"plain_text\",\"text\":\":repeat: Replay\",\"emoji\":true},\"value\":\"11\",\"style\":\"primary\",\"type\":\"button\",\"action_ts\":\"1769384623.330436\"}]}"
+          },
+          "webhookUrl": "http://localhost:5678/webhook/dlq/actions",
+          "executionMode": "production"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Parse Slack Payload": {
+      "main": [
+        [
+          {
+            "node": "If: Parsed OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If: Parsed OK": {
+      "main": [
+        [
+          {
+            "node": "Switch: Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Switch: Action": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Mark Replay Requested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase: Mark Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Mark Resolved": {
+      "main": [
+        [
+          {
+            "node": "Slack: Update Message (Resolve)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Update Message (Replay)": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Update Message (Resolve)": {
+      "main": [
+        []
+      ]
+    },
+    "Supabase: Mark Replay Requested": {
+      "main": [
+        [
+          {
+            "node": "Slack: Update Message (Replay)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: Slack Actions": {
+      "main": [
+        [
+          {
+            "node": "Parse Slack Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "f1d27a97-bf22-448f-9b7f-dd3f1f6b018f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e5e98e8b2203f67e9af3cbb09d6f17bccc134ba44abab87138e197a50cd19cda"
+  },
+  "id": "wsxkI_UOgq06GJpbPJccj",
+  "tags": []
+}

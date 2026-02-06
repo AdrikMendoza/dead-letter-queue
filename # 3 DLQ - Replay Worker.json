@@ -1,0 +1,523 @@
+{
+  "name": "# 3 DLQ - Replay Worker",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dlq/replay-worker",
+        "options": {}
+      },
+      "id": "6a68a4fc-098b-4c98-9c4c-6328b5be4738",
+      "name": "Webhook: Replay Worker",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1584,
+        80
+      ],
+      "webhookId": "7a18a357-f410-4bc3-9d6c-cb575a5a0b4b"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "dlq_events",
+        "limit": 1,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.execution_id }}"
+            }
+          ]
+        }
+      },
+      "id": "f619e23d-9a99-4b5c-9d0e-2c75b3c53664",
+      "name": "Supabase: Fetch DLQ Event",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1360,
+        64
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\n\n// payload puede estar guardado como string JSON o como objeto jsonb\nlet stored;\ntry {\n  stored = (typeof row.payload === 'string') ? JSON.parse(row.payload) : row.payload;\n} catch (e) {\n  stored = { parse_error: String(e), raw_payload: row.payload };\n}\n\nreturn [{\n  json: {\n    // Identidad del evento\n    execution_id: row.execution_id,\n    workflow_name: row.workflow_name,\n    prev_error: row.error_message,\n    retry_count: row.retry_count ?? 0,\n\n    // payload parseado\n    stored_payload: stored,\n    execution_url: stored?.execution?.url,\n\n    // Datos de Slack pasados por el caller (Workflow 2)\n    channel: $node['Webhook: Replay Worker'].json.channel,\n    message_ts: $node['Webhook: Replay Worker'].json.message_ts,\n    requested_by: $node['Webhook: Replay Worker'].json.requested_by\n  }\n}];"
+      },
+      "id": "78bc43ec-06d8-43f4-a2c6-b5fb2eb142a4",
+      "name": "Function: Parse Stored Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1136,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "430cf5e5-bff7-46f7-b0f3-8c0df852112c",
+              "leftValue": "={{ $json.stored_payload.execution.error.description }}",
+              "rightValue": "SyntaxError",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0adb1629-4036-4dfc-9a5c-a48c27988197",
+      "name": "IF: Non-Replayable (SyntaxError)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "dlq_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.execution_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "needs_fix"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "slack"
+            }
+          ]
+        }
+      },
+      "id": "04131156-ce63-46f0-9108-e5cc580ee5b4",
+      "name": "Supabase: Mark Needs Fix",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -656,
+        -80
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://slack.com/api/chat.update",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_SLACK_BOT_TOKEN_HERE\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{$('Webhook: Replay Worker').item.json.body.channel}}\",\n  \"ts\": \"{{$('Webhook: Replay Worker').item.json.body.message_ts}}\",\n  \"text\": \"⛔ Replay blocked (fix required)\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"⛔ Replay Blocked (Fix Required)\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Workflow:*\\n{{$json.workflow_name}}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Requested by:*\\n<@{{$('Webhook: Replay Worker').item.json.body.requested_by}}>\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Execution ID:*\\n`{{$json.execution_id}}`\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Reason:*\\n{{$('IF: Non-Replayable (SyntaxError)?').item.json.stored_payload.execution.error.description}}\" }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Execution:*\\n<{{$('IF: Non-Replayable (SyntaxError)?').item.json.execution_url}}|Open Execution>\\n*Next step:* Fix the Code node, then click Replay again.\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "ba19b979-f1aa-4d9a-9307-f1bdd232aee3",
+      "name": "Slack: Update Message (Replay Blocked)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -400,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_N8N_INSTANCE_URL/api/v1/executions/{{ $json.execution_id }}/retry",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"X-N8N-API-KEY\": \"YOUR_N8N_API_KEY_HERE\",\n  \"Content-Type\": \"application/json\",\n  \"Accept\": \"application/json\",\n  \"ngrok-skip-browser-warning\": \"true\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"input\": {\n    \"source\": \"dlq_replay\",\n    \"execution_id\": \"{{$json.execution_id}}\",\n    \"triggered_by\": \"{{ $('Webhook: Replay Worker').item.json.body.requested_by }}\",\n    \"stored_payload\": {{ JSON.stringify($json.stored_payload) }}\n  }\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e3c46f40-aae4-4b1a-ae64-7283a05d0919",
+      "name": "HTTP: Replay Actual (Worker Webhook)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -656,
+        192
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2GzoMqhx2irTnflf",
+          "name": "Unnamed credential"
+        },
+        "httpHeaderAuth": {
+          "id": "Y341B4mQOHugAPDB",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.update",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_SLACK_BOT_TOKEN_HERE\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{$('Webhook: Replay Worker').item.json.body.channel}}\",\n  \"ts\": \"{{$('Webhook: Replay Worker').item.json.body.message_ts}}\",\n  \"text\": \"❌ Replay failed (workflow still broken)\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"❌ Replay Failed (Still Failing)\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Workflow:*\\n{{$json.workflow_name}}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Replay triggered by:*\\n<@{{$('Webhook: Replay Worker').item.json.body.requested_by}}>\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Execution ID:*\\n`{{$json.execution_id}}`\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*New Error:*\\n{{ $('IF: Replay Error?').item.json.data.resultData.runData['HTTP Request'][0].error.message }}\"\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"⚠️ The workflow was retried but failed again.\\n\\n*Execution:*\\n<{{ $('IF: Non-Replayable (SyntaxError)?').item.json.execution_url }}|Open Latest Execution>\\n\\n✅ Next step: Fix the root cause before retrying again.\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "249024b0-d825-4f0e-b9cd-4a073ce0c88c",
+      "name": "Slack: Update Message (Replay Failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        80,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "f797973d-0775-48d3-9516-4bcca27449c6",
+              "leftValue": "={{ $json.data.resultData.runData['HTTP Request'][0].executionStatus }}",
+              "rightValue": "error",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "155c5eb1-249e-4637-9ad4-5a687267bd46",
+      "name": "IF: Replay Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "dlq_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Webhook: Replay Worker').item.json.body.execution_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "replay_succeded"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "slack"
+            },
+            {
+              "fieldId": "error_message",
+              "fieldValue": "={{$node['HTTP: Replay Actual (Worker Webhook)'].json.body || $node['HTTP: Replay Actual (Worker Webhook)'].json.error || 'Replay failed'}}"
+            }
+          ]
+        }
+      },
+      "id": "5d5bba12-0ea2-49a3-81ed-6423817f486c",
+      "name": "Supabase: Mark Replay Success",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        224
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "dlq_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Webhook: Replay Worker').item.json.body.execution_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "replay_failed"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "slack"
+            },
+            {
+              "fieldId": "error_message",
+              "fieldValue": "={{ $json.data.resultData.error.message }}"
+            },
+            {
+              "fieldId": "retry_count",
+              "fieldValue": "1"
+            }
+          ]
+        }
+      },
+      "id": "e4599daf-a0f7-416b-b57c-90b7faea6c43",
+      "name": "Supabase: Mark Replay Failed",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        0
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "AKaeS8R6OBZj9HKz",
+          "name": "Supabase Insights DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.update",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_SLACK_BOT_TOKEN_HERE\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{$('Webhook: Replay Worker').item.json.body.channel}}\",\n  \"ts\": \"{{$('Webhook: Replay Worker').item.json.body.message_ts}}\",\n  \"text\": \"✅ Replay successful (workflow recovered)\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"✅ Replay Successful (Recovered)\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Workflow:*\\n{{$json.workflow_name}}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Replay triggered by:*\\n<@{{$('Webhook: Replay Worker').item.json.body.requested_by}}>\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Execution ID:*\\n`{{$json.execution_id}}`\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Status:*\\nResolved ✅\"\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"🎉 The workflow replay completed successfully.\\n\\n*Execution:*\\n<{{$json.execution_url}}|Open Successful Execution>\\n\\n✅ This event has been cleared from the DLQ.\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "fed85dd4-08d4-462c-b848-8027b8a8b76a",
+      "name": "Slack: Update Message (Replay Success)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        128,
+        240
+      ]
+    }
+  ],
+  "pinData": {
+    "Webhook: Replay Worker": [
+      {
+        "json": {
+          "headers": {
+            "host": "jeana-nonarithmetic-abigail.ngrok-free.dev",
+            "user-agent": "axios/1.12.0",
+            "content-length": "209",
+            "accept": "application/json,text/html,application/xhtml+xml,application/xml,text/*;q=0.9, image/*;q=0.8, */*;q=0.7",
+            "accept-encoding": "gzip, compress, deflate, br",
+            "content-type": "application/json",
+            "x-forwarded-for": "181.115.171.200",
+            "x-forwarded-host": "jeana-nonarithmetic-abigail.ngrok-free.dev",
+            "x-forwarded-proto": "https"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "execution_id": "749",
+            "channel": "C0AB5CASDND",
+            "message_ts": "1769388826.102109",
+            "requested_by": "U0AAB13U93R",
+            "response_url": "https://hooks.slack.com/actions/T0AAQD1SSLE/10354360410663/ETb8C1Cetx1QVTGRN5eN9VYP"
+          },
+          "webhookUrl": "http://localhost:5678/webhook/dlq/replay-worker",
+          "executionMode": "production"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook: Replay Worker": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Fetch DLQ Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Fetch DLQ Event": {
+      "main": [
+        [
+          {
+            "node": "Function: Parse Stored Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function: Parse Stored Payload": {
+      "main": [
+        [
+          {
+            "node": "IF: Non-Replayable (SyntaxError)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Non-Replayable (SyntaxError)?": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Mark Needs Fix",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP: Replay Actual (Worker Webhook)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Mark Needs Fix": {
+      "main": [
+        [
+          {
+            "node": "Slack: Update Message (Replay Blocked)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Replay Actual (Worker Webhook)": {
+      "main": [
+        [
+          {
+            "node": "IF: Replay Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Replay Error?": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Mark Replay Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase: Mark Replay Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Mark Replay Success": {
+      "main": [
+        [
+          {
+            "node": "Slack: Update Message (Replay Success)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Mark Replay Failed": {
+      "main": [
+        [
+          {
+            "node": "Slack: Update Message (Replay Failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "7677ac62-e644-4b02-9ebe-46f8bb349c91",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e5e98e8b2203f67e9af3cbb09d6f17bccc134ba44abab87138e197a50cd19cda"
+  },
+  "id": "idDJMA5gkfvdAEHrWQCqp",
+  "tags": []
+}
