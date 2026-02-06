@@ -62,6 +62,8 @@ The DLQ system consists of three interconnected n8n workflows:
 
 **Purpose**: Global error handler that captures all workflow failures
 
+![Main Error Logger Workflow](./%231%20Error%20logger.png)
+
 **Nodes**:
 
 1. **Error Trigger** - n8n's built-in Error Trigger node
@@ -107,6 +109,8 @@ The DLQ system consists of three interconnected n8n workflows:
 **File**: `#2 - DLQ - Slack Actions.json`
 
 **Purpose**: Handles user interactions from Slack notification buttons
+
+![DLQ - Slack Actions Workflow](./%232%20-%20DLQ%20-%20Slack%20Actions.png)
 
 **Nodes**:
 
@@ -173,6 +177,8 @@ The DLQ system consists of three interconnected n8n workflows:
 **File**: `# 3 DLQ - Replay Worker.json`
 
 **Purpose**: Intelligent replay engine that retries failed workflows
+
+![DLQ - Replay Worker Workflow](./%23%203%20DLQ%20-%20Replay%20Worker.png)
 
 **Nodes**:
 
@@ -351,6 +357,20 @@ CREATE TABLE dlq_events (
 7. **Activate workflows**:
    - Activate all three workflows
    - Test by intentionally failing a workflow
+
+## 📸 Slack Notification Example
+
+Here's what the interactive Slack notification looks like when a workflow fails:
+
+![Slack Notification Example](./Slack%20Notification.png)
+
+The notification includes:
+- Clear error details and workflow information
+- Direct link to the n8n execution
+- Interactive **Replay** and **Resolve** buttons
+- Status tracking as the event progresses
+
+---
 
 ## 💪 Resilience Features
 
